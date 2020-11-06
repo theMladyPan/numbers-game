@@ -8,7 +8,7 @@
 using namespace std;
 using namespace std::chrono_literals;
 
-mutex mxin, mxout;
+mutex mxout, mxrec;
 
 const unsigned long npthreads = thread::hardware_concurrency(); // num of threads available
 
@@ -44,135 +44,56 @@ public:
     uint64_t d;
 };
 
-void worker(queue<uint64_t> &qin, queue<num> &qout, bool &work){
-    using namespace std::chrono_literals;
-
-    num next;
-    uint64_t n;
+void worker(const ulong offset, num &record, chrono::time_point<std::chrono::steady_clock> start){
+    uint64_t n = offset;
     uint64_t depth;
-
-    while(work){
-        while(qin.size() < npthreads+1){
-            std::this_thread::sleep_for(100ns);
-            // wait until queue is not empty
-        }
-        mxin.lock();
-        n = qin.front();
-        qin.pop();
-        mxin.unlock();
-
-        depth = 0;
-        analyze(n, depth);
-        next.d = depth;
-        next.n = n;
-
-        mxout.lock();
-        qout.push(next);
-        mxout.unlock();
-    }
-}
-
-int main4(){
-    queue<uint64_t> in;
-    queue<num> out;
-    thread tpool[npthreads];
-    bool work = true;
-    for (unsigned long i=0; i<npthreads; i++){
-        tpool[i] = thread(worker, ref(in), ref(out), ref(work));
-    }
-
-    uint64_t n = 1;
-    uint64_t record = 0;
-    num cand;
-
-    while(record<8){
-        if(in.size() < npthreads*2){
-            for(unsigned long i=0; i < npthreads*2; i++){
-                mxin.lock();
-                in.push(n++);
-                mxin.unlock();
-            }
-        }
-        cout << "\rProcessing: " << n;
-
-        while(!out.empty()){
-            mxout.lock();
-            cand = out.front();
-            out.pop();
-            mxout.unlock();
-            if(record<cand.d){
-                record = cand.d;
-                cout << "\rNumber: " << cand.n << ", depth: " << cand.d << "\n";
-            }
-        }
-    }
-
-       return 0;
-
-    work = false;
-    for (unsigned long i=0; i<npthreads; i++){
-        tpool[i].join();
-    }
-
-}
-
-int main3(){
-    vector<thread> tpool;
-    // unsigned char record(0);
-    uint64_t candidates[npthreads];
-    uint64_t depths[npthreads];
-    uint64_t n(1);
-    uint64_t record = 0;
+    chrono::time_point<std::chrono::steady_clock> end;
+    chrono::duration<double> diff;
 
     while(1){
-        for(unsigned long i=0; i<npthreads; i++){
-            candidates[i] = n++;
-            depths[i]= 0;
-            tpool.push_back(thread(analyze, candidates[i], ref(depths[i])));
-        }
-        cout << "\rProcessing: " << n;
-        for(auto &t:tpool){
-            t.join();
-        }
-        tpool.clear();
+        depth = 0;
+        analyze(n, depth);
 
-        for(unsigned long i=0; i<npthreads; i++){
-            if(depths[i] > record){
-                record = depths[i];
-                cout << "\rNumber: " << candidates[i] << ", depth: " << depths[i] << "\n";
-                if(depths[i] == 8){
-                    return 0;
-                }
-            }
+        mxrec.lock();
+        if(depth > record.d){
+            record.d = depth;
+            record.n = n;
+            mxrec.unlock();
+
+            end = std::chrono::steady_clock::now();
+            diff = end-start;
+            cout << "\rNumber: " << n << ", depth: " << depth << ", in: " << diff.count() <<"s\n";
+        }else if(depth == record.d && n < record.n){
+            record.n = n;
+            mxrec.unlock();
+
+            end = std::chrono::steady_clock::now();
+            diff = end-start;
+            cout << "\rNumber: " << n << ", depth: " << depth << ", in: " << diff.count() <<"s\n";
+        }else{
+            mxrec.unlock();
+        }
+        n += npthreads;
+
+        if(n%16384 == 0){
+            cout << "\rProcessing: " << n;
         }
     }
-
-    return 0;
 }
-
 
 int main()
 {
-    uint64_t record(0);
-    uint64_t depth(0);
-    uint64_t n(0);
-    uint64_t semi;
+    num record;
+    record.d = 0;
+    record.n = 1;
+    thread tpool[npthreads];
 
-    while(1){
-        n += 1;
-        depth = 0;
-        semi = analyze(n, depth);
-        if(n%4096 == 0){
-            cout << "\rProcessing: " << n;
-        }
-        if(semi > record){
-            record = semi;
-            cout << "\rNumber: " << n << ", depth: " << depth << "\n";
-            if(record == 12){
-                return 0;
-            }
-        }
+    auto start = std::chrono::steady_clock::now();
+
+    for(ulong i=0; i<npthreads; i++){
+        tpool[i] = thread(worker, i, ref(record), start);
     }
+    tpool[npthreads-1].join();
 
     return 0;
 }
